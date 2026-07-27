@@ -7,16 +7,19 @@ from typing import Literal, Protocol, SupportsIndex, TypeVar
 
 import jax
 import jax.numpy as jnp
-import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
 import numpy as np
 import torch
 
 import openpi.models.model as _model
 import openpi.training.config as _config
-from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
+
+
+def _get_lerobot():
+    import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+    return lerobot_dataset
 
 
 class Dataset(Protocol[T_co]):
@@ -131,14 +134,19 @@ def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
     """Create a dataset for training."""
+    if data_config.ario_config is not None:
+        from openpi.datasets.ario_dataset import ArioStreamingDataset
+
+        return ArioStreamingDataset(data_config.ario_config, action_horizon)
+
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
-    dataset = lerobot_dataset.LeRobotDataset(
+    dataset_meta = _get_lerobot().LeRobotDatasetMetadata(repo_id)
+    dataset = _get_lerobot().LeRobotDataset(
         data_config.repo_id,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
@@ -159,6 +167,8 @@ def create_rlds_dataset(
     shuffle: bool = False,
 ) -> Dataset:
     # At the moment, we only support DROID for RLDS datasets.
+    from openpi.training.droid_rlds_dataset import DroidRldsDataset
+
     return DroidRldsDataset(
         data_dir=data_config.rlds_data_dir,
         batch_size=batch_size,
@@ -491,7 +501,7 @@ class RLDSDataLoader:
 
     def __init__(
         self,
-        dataset: DroidRldsDataset,
+        dataset: "DroidRldsDataset",
         *,
         sharding: jax.sharding.Sharding | None = None,
         num_batches: int | None = None,

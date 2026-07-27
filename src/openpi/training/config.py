@@ -20,6 +20,7 @@ import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
+import openpi.policies.xingchen_policy as xingchen_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -89,6 +90,9 @@ class DataConfig:
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
+
+    # If set, use ArioStreamingDataset instead of LeRobot.
+    ario_config: object | None = None
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -207,6 +211,83 @@ class FakeDataConfig(DataConfigFactory):
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         return DataConfig(repo_id=self.repo_id)
+
+
+@dataclasses.dataclass(frozen=True)
+class ArioXingchenDataConfig(DataConfigFactory):
+    """Config for Xingchen data read directly from Ario format on OSS (no LeRobot conversion)."""
+
+    s3_prefixes: str = ""
+    s3_endpoint: str = "https://oss-cn-wulanchabu-internal.aliyuncs.com"
+    video_downsample_rate: int = 6
+    min_frames: int = 1885
+    image_size: tuple[int, int] = (320, 240)
+    use_delta_actions: bool = True
+    default_prompt: str = "fold clothes"
+    load_instructions: bool = False
+    cache_size: int = 32
+    max_episodes: int | None = None
+    disk_cache_dir: str = "/tmp/ario_disk_cache"
+    disk_cache_max_gb: float = 200.0
+    multi_view: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        from openpi.datasets.ario_dataset import ArioConfig
+
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/image": "observation/image",
+                        "observation/cam_high": "observation/cam_high",
+                        "observation/cam_left_wrist": "observation/cam_left_wrist",
+                        "observation/cam_right_wrist": "observation/cam_right_wrist",
+                        "observation/state": "observation/state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[xingchen_policy.XingchenInputs(model_type=model_config.model_type)],
+            outputs=[xingchen_policy.XingchenOutputs()],
+        )
+
+        if self.use_delta_actions:
+            delta_action_mask = _transforms.make_bool_mask(9, -2, 9, -1, 9, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory(default_prompt=self.default_prompt)(model_config)
+
+        ario_cfg = ArioConfig(
+            s3_prefixes=self.s3_prefixes,
+            s3_endpoint=self.s3_endpoint,
+            video_downsample_rate=self.video_downsample_rate,
+            min_frames=self.min_frames,
+            image_size=self.image_size,
+            task=self.default_prompt,
+            load_instructions=self.load_instructions,
+            cache_size=self.cache_size,
+            max_episodes=self.max_episodes,
+            disk_cache_dir=self.disk_cache_dir,
+            disk_cache_max_gb=self.disk_cache_max_gb,
+            multi_view=self.multi_view,
+        )
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=("actions",),
+            ario_config=ario_cfg,
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -929,6 +1010,38 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
         num_train_steps=20_000,
+    ),
+    #
+    # Fine-tuning Xingchen (新积木) configs.
+    #
+    TrainConfig(
+        name="pi05_xingchen",
+        exp_name="new_blocks",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,
+            action_horizon=50,
+        ),
+        data=ArioXingchenDataConfig(
+            repo_id="xingchen/new_blocks",
+            s3_prefixes="oss://shengshu-base2-test/xiaojun/新积木/",
+            min_frames=1,
+            load_instructions=True,
+            use_delta_actions=True,
+        ),
+        pytorch_weight_path="./checkpoints/pi05_base_pytorch",
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=5_000,
+            peak_lr=5e-5,
+            decay_steps=500_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        num_train_steps=100_000,
+        batch_size=64,
+        save_interval=5000,
+        keep_period=10_000,
     ),
     #
     # Debugging configs.
