@@ -6,7 +6,7 @@ import numpy as np
 from openpi import transforms
 from openpi.models import model as _model
 
-ACTION_DIM = 31
+ACTION_DIM = 26
 
 
 def make_xingchen_example() -> dict:

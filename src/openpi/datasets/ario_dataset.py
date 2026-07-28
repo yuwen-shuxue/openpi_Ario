@@ -13,8 +13,8 @@ import cv2
 import numpy as np
 import torch
 
-ACTION_DIM = 31
-PT_FILES = ["eef_torso.pt", "head.pt", "eef_left.pt", "gripper_cmd.pt", "eef_right.pt"]
+ACTION_DIM = 26
+PT_FILES = ["torso.pt", "head.pt", "eef_left.pt", "gripper_cmd.pt", "eef_right.pt"]
 IMAGE_SIZE = (320, 240)
 
 CAMERA_VIEWS = ("cam_high", "cam_left_wrist", "cam_right_wrist")
@@ -146,7 +146,7 @@ class ArioStreamingDataset:
         return episodes
 
     def _build_index(self):
-        """Download eef_torso.pt from each episode to determine its length."""
+        """Download torso.pt from each episode to determine its length."""
         import json
 
         from tqdm import tqdm
@@ -158,7 +158,7 @@ class ArioStreamingDataset:
 
         for bucket, prefix in tqdm(self._episodes, desc="Building frame index"):
             try:
-                data = self._s3_download_bytes(s3, bucket, prefix + "eef_torso.pt")
+                data = self._s3_download_bytes(s3, bucket, prefix + "torso.pt")
                 tensor = torch.load(io.BytesIO(data), map_location="cpu")
                 raw_len = tensor.shape[0]
             except Exception:
@@ -382,7 +382,7 @@ class ArioStreamingDataset:
 
         state_action = torch.cat(
             [
-                tensors["eef_torso.pt"],
+                tensors["torso.pt"],
                 tensors["head.pt"],
                 tensors["eef_left.pt"],
                 tensors["gripper_cmd.pt"][:, 0:1],
